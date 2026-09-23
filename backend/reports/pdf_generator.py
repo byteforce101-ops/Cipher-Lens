@@ -1,0 +1,302 @@
+"""
+PDF report generation module using Jinja2 and WeasyPrint.
+Renders an executive security assessment report and outputs to backend/reports_storage/.
+"""
+
+import os
+from typing import Any, Dict
+from jinja2 import Template
+
+REPORTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "reports_storage"))
+os.makedirs(REPORTS_DIR, exist_ok=True)
+
+REPORT_HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>IPsec Security Assessment - {{ scan_name }}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 20mm;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1a1a1a;
+    line-height: 1.5;
+    font-size: 11pt;
+  }
+  .header {
+    border-bottom: 2px solid #c88750;
+    padding-bottom: 12px;
+    margin-bottom: 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+  }
+  .header h1 {
+    font-size: 24pt;
+    margin: 0;
+    color: #1e221b;
+  }
+  .header .meta {
+    font-size: 9pt;
+    color: #666;
+    margin-top: 4px;
+  }
+  .score-card {
+    background: #f8f6f0;
+    border: 1px solid #e2d9cc;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+  }
+  .score-num {
+    font-size: 38pt;
+    font-weight: 700;
+    color: #c88750;
+    line-height: 1;
+  }
+  .score-grade {
+    font-size: 14pt;
+    font-weight: 600;
+    color: #333;
+  }
+  .ai-summary {
+    background: #fdfbf7;
+    border-left: 4px solid #c88750;
+    padding: 12px 16px;
+    margin-bottom: 24px;
+    font-size: 10.5pt;
+    color: #2b2b2b;
+  }
+  h2 {
+    font-size: 15pt;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 6px;
+    margin-top: 24px;
+    color: #1e221b;
+  }
+  .finding {
+    border: 1px solid #e2e0d7;
+    border-radius: 6px;
+    margin-bottom: 14px;
+    padding: 12px 16px;
+    page-break-inside: avoid;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 8pt;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .badge-Critical { background: #fee2e2; color: #b91c1c; }
+  .badge-High { background: #ffedd5; color: #c2410c; }
+  .badge-Medium { background: #fef3c7; color: #b45309; }
+  .badge-Low { background: #f0fdf4; color: #15803d; }
+  .finding-title {
+    font-size: 12pt;
+    font-weight: 600;
+    margin-left: 8px;
+    color: #1a1a1a;
+  }
+  .finding-meta {
+    font-size: 9pt;
+    color: #777;
+    margin-top: 4px;
+  }
+  .finding-box {
+    background: #f4f4f2;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 9pt;
+    margin-top: 8px;
+  }
+  .code-block {
+    background: #111310;
+    color: #d8d4c9;
+    padding: 14px;
+    border-radius: 6px;
+    font-family: monospace;
+    font-size: 8.5pt;
+    white-space: pre-wrap;
+  }
+  .footer {
+    margin-top: 40px;
+    font-size: 8pt;
+    color: #999;
+    text-align: center;
+    border-top: 1px solid #eee;
+    padding-top: 10px;
+  }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>IPsec Security Assessment</h1>
+      <div class="meta">Target: <b>{{ file_name }}</b> | Scan: <b>{{ scan_name }}</b> | Date: {{ analyzed_at }}</div>
+    </div>
+  </div>
+
+  <div class="score-card">
+    <div>
+      <div class="score-num">{{ score }}</div>
+      <div class="score-grade">{{ grade }}</div>
+    </div>
+    <div style="flex: 1; padding-left: 20px; border-left: 1px solid #e5dfd5;">
+      <div><b>Executive Overview</b></div>
+      <div style="font-size: 9pt; color: #666; margin-top: 4px;">
+        Critical: {{ severity_counts.Critical }} &nbsp;|&nbsp;
+        High: {{ severity_counts.High }} &nbsp;|&nbsp;
+        Medium: {{ severity_counts.Medium }} &nbsp;|&nbsp;
+        Low: {{ severity_counts.Low }}
+      </div>
+    </div>
+  </div>
+
+  <div class="ai-summary">
+    <strong>AI Security Assessment:</strong><br/>
+    {{ ai_summary }}
+  </div>
+
+  <h2>Security Findings ({{ findings|length }})</h2>
+  {% for f in findings %}
+  <div class="finding">
+    <div>
+      <span class="badge badge-{{ f.severity }}">{{ f.severity }}</span>
+      <span class="finding-title">{{ f.title }}</span>
+      <span class="finding-meta">— {{ f.category }}</span>
+    </div>
+    <p style="margin: 8px 0; font-size: 9.5pt; color: #444;">{{ f.explanation }}</p>
+    <div class="finding-box">
+      <div><span style="color:#777;">Detected:</span> <b>{{ f.detected }}</b></div>
+      <div style="margin-top: 3px;"><span style="color:#777;">Recommended:</span> <b style="color:#2f855a;">{{ f.recommended }}</b></div>
+    </div>
+  </div>
+  {% endfor %}
+
+  {% if technical_details %}
+  <h2>Technical Details / Extracted Proposal</h2>
+  <div class="code-block">{{ technical_details }}</div>
+  {% endif %}
+
+  <div class="footer">
+    Generated by IPsec Analyzer Security Suite · Confidential &amp; Proprietary
+  </div>
+</body>
+</html>
+"""
+
+
+def generate_pdf(report_id: str, scan_data: Dict[str, Any]) -> str:
+    """
+    Renders the report HTML and saves as a PDF file in reports_storage/{report_id}.pdf.
+    Returns the absolute path to the generated PDF file.
+    """
+    pdf_path = os.path.join(REPORTS_DIR, f"{report_id}.pdf")
+
+    template = Template(REPORT_HTML_TEMPLATE)
+    html_content = template.render(
+        scan_name=scan_data.get("scanName", "IPsec Security Review"),
+        file_name=scan_data.get("fileName", "configuration.conf"),
+        analyzed_at=scan_data.get("analyzedAt", "Sep 23, 2026"),
+        score=scan_data.get("score", 0),
+        grade=scan_data.get("grade", "Grade F"),
+        severity_counts=scan_data.get("severityCounts", {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}),
+        ai_summary=scan_data.get("aiSummary", ""),
+        findings=scan_data.get("findings", []),
+        technical_details=scan_data.get("technicalDetails", ""),
+    )
+
+    try:
+        from weasyprint import HTML
+        HTML(string=html_content).write_pdf(pdf_path)
+    except Exception as e:
+        # Fallback if WeasyPrint or native GTK cdlls are not installed on the OS
+        print(f"[PDF Generator] WeasyPrint generation fallback due to: {e}")
+        _generate_fallback_pdf(pdf_path, scan_data, html_content)
+
+    return pdf_path
+
+
+def _generate_fallback_pdf(pdf_path: str, scan_data: Dict[str, Any], html_content: str):
+    """
+    Fallback generator that creates a valid PDF containing the report summary
+    if WeasyPrint system dependencies (GTK3/Pango) are missing.
+    """
+    title = f"IPsec Security Assessment - {scan_data.get('scanName', 'Review')}"
+    score_line = f"Score: {scan_data.get('score', 0)} ({scan_data.get('grade', 'N/A')})"
+    summary = scan_data.get("aiSummary", "")
+
+    # Clean minimal PDF format specification
+    content_stream = f"""BT
+/F1 18 Tf
+50 750 Td
+({title}) Tj
+/F1 12 Tf
+0 -30 Td
+({score_line}) Tj
+0 -25 Td
+(Target File: {scan_data.get('fileName', 'Unknown')}) Tj
+0 -25 Td
+(Executive AI Summary:) Tj
+/F1 10 Tf
+0 -20 Td
+({summary[:90]}) Tj
+0 -15 Td
+({summary[90:180]}) Tj
+0 -30 Td
+(Security Findings Summary:) Tj
+"""
+    y_offset = -20
+    for f in scan_data.get("findings", [])[:6]:
+        line = f"[{f.get('severity')}] {f.get('title')}: {f.get('recommended')}"
+        content_stream += f"0 {y_offset} Td\n({line[:80]}) Tj\n"
+        y_offset = -18
+
+    content_stream += "ET"
+
+    stream_bytes = content_stream.encode("latin-1", "replace")
+    pdf_bytes = f"""%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length {len(stream_bytes)} >>
+stream
+{content_stream}
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000234 00000 n 
+0000000330 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+412
+%%EOF""".encode("latin-1", "replace")
+
+    with open(pdf_path, "wb") as f:
+        f.write(pdf_bytes)
