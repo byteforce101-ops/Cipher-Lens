@@ -231,7 +231,42 @@ function Upload({
             )}
           </div>
 
-          <label className="mt-8 block text-left text-xs font-medium text-[#d0cec4]">
+          <div className="mt-4 flex justify-center">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                const sampleText = `# Sample StrongSwan / Libreswan IPsec Configuration for Testing
+conn production-vpn
+    authby=secret
+    keyexchange=ikev1
+    ike=3des-sha1-modp1024
+    esp=aes256-sha1
+    aggressive=yes
+    dpddelay=180s
+    dpdaction=restart
+    ikelifetime=8h
+    keylife=1h
+    left=192.168.1.1
+    leftsubnet=10.0.0.0/24
+    right=203.0.113.5
+    rightsubnet=10.1.0.0/24
+    auto=start
+`
+                const sampleFile = new File([sampleText], 'sample-ipsec.conf', { type: 'text/plain' })
+                choose(sampleFile)
+                if (!scanName) {
+                  setScanName('Sample Production VPN Audit')
+                }
+              }}
+              className="inline-flex items-center gap-2 rounded-xl border border-[#d9a06a]/30 bg-[#d9a06a]/[0.08] px-4 py-2 text-xs font-semibold text-[#f0bd86] transition hover:border-[#d9a06a]/60 hover:bg-[#d9a06a]/[0.18]"
+            >
+              <Sparkles className="size-3.5" />
+              Load Sample IPsec Configuration (.conf)
+            </button>
+          </div>
+
+          <label className="mt-6 block text-left text-xs font-medium text-[#d0cec4]">
             Scan name
             <input
               id="scan-name"
@@ -487,18 +522,42 @@ export default function Page() {
     }
 
     try {
-      let response: Response
+      let response: Response | null = null
+
+      // 1. Try Next.js rewrites proxy (/api/analyze)
       try {
-        response = await fetch('/api/analyze', {
+        const proxyRes = await fetch('/api/analyze', {
           method: 'POST',
           body: formData,
         })
-      } catch {
-        // Fallback directly to localhost:8000 if Next.js proxy rewrite isn't active
-        response = await fetch('http://127.0.0.1:8000/api/analyze', {
-          method: 'POST',
-          body: formData,
-        })
+        if (proxyRes.ok) {
+          response = proxyRes
+        } else if (proxyRes.status !== 502 && proxyRes.status !== 504 && proxyRes.status !== 500) {
+          response = proxyRes
+        }
+      } catch (proxyErr) {
+        console.warn('Next.js proxy route failed, attempting direct backend connection...', proxyErr)
+      }
+
+      // 2. If proxy was unreachable or failed, try direct FastAPI backend at http://127.0.0.1:8000
+      if (!response || !response.ok) {
+        try {
+          const directRes = await fetch('http://127.0.0.1:8000/api/analyze', {
+            method: 'POST',
+            body: formData,
+          })
+          if (directRes.ok || !response) {
+            response = directRes
+          }
+        } catch (directErr) {
+          console.warn('Direct backend connection failed:', directErr)
+        }
+      }
+
+      if (!response) {
+        throw new Error(
+          'Failed to fetch: Cannot connect to the IPsec backend on port 8000. Please start the backend by running start_backend.bat or start_all.bat.'
+        )
       }
 
       if (!response.ok) {
@@ -518,7 +577,11 @@ export default function Page() {
       }, delay)
     } catch (err: any) {
       console.error('Scan error:', err)
-      setUploadError(err.message || 'Failed to connect to backend at http://localhost:8000. Is the server running?')
+      const errorMsg =
+        err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError')
+          ? 'Backend offline: Cannot reach http://127.0.0.1:8000. Please launch the backend server using start_backend.bat or start_all.bat.'
+          : err.message || 'Failed to connect to backend at http://127.0.0.1:8000. Is the server running?'
+      setUploadError(errorMsg)
       setView('upload')
     }
   }
