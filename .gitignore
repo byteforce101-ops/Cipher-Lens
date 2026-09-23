@@ -1,3 +1,10 @@
+# Next.js and frontend ignores
+node_modules
+.next/
+.DS_Store
+*.pem
+*.tsbuildinfo
+
 # v0 sandbox internal files
 __v0_runtime_loader.js
 __v0_devtools.tsx
@@ -7,9 +14,19 @@ __v0_jsx-dev-runtime.ts
 .vercel/
 
 # Environment variables
+.env
 .env*.local
+backend/.env
 
-# Common ignores
-node_modules
-.next/
-.DS_Store
+# Python / Virtual Environment
+venv/
+.venv/
+backend/venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+.pytest_cache/
+
+# Generated reports storage
+backend/reports_storage/*.pdf
