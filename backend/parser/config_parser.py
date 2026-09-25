@@ -76,7 +76,7 @@ def parse_config_file(content: str, filename: str) -> Dict[str, Any]:
                 parsed["parameters"]["dpd_delay"] = val
             elif key in ["dpdaction", "dpd_action"]:
                 parsed["parameters"]["dpd_action"] = val
-            elif key in ["lifetime", "ikelifetime", "salifetime"]:
+            elif key in ["lifetime", "ikelifetime", "salifetime", "keylife"]:
                 parsed["parameters"]["lifetime"] = val
 
         # Check for pre-shared keys defined directly or in ipsec.secrets

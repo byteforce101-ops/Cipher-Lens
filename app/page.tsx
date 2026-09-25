@@ -1,7 +1,7 @@
 'use client'
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronDown, ChevronUp, Download, FileCode2, Gauge, LogOut, ShieldCheck, Sparkles, UploadCloud } from 'lucide-react'
+import { Check, ChevronDown, ChevronUp, Download, FileCode2, Gauge, LogOut, ShieldAlert, ShieldCheck, Sparkles, UploadCloud } from 'lucide-react'
 
 type View = 'login' | 'upload' | 'processing' | 'results'
 
@@ -12,6 +12,9 @@ type Finding = {
   explanation: string
   detected: string
   recommended: string
+  detected_config_line?: string
+  recommended_config_line?: string
+  compliance_tags?: string[]
 }
 
 type ScanResult = {
@@ -33,10 +36,50 @@ type ScanResult = {
 }
 
 const defaultFindings: Finding[] = [
-  { severity: 'Critical', title: 'Weak pre-shared key detected', category: 'Authentication', explanation: 'The configured key is short enough to be exposed to practical dictionary and brute-force attacks.', detected: 'vpn-key-2024', recommended: 'Use a 32+ character random secret' },
-  { severity: 'High', title: 'Aggressive mode is enabled', category: 'IKE negotiation', explanation: 'Aggressive mode reveals identity information during IKE phase 1 and reduces negotiation privacy.', detected: 'aggressive-mode', recommended: 'Use main mode with IKEv2' },
-  { severity: 'Medium', title: 'Legacy encryption proposal', category: 'Cryptography', explanation: '3DES remains enabled in the proposal set and should be removed from modern deployments.', detected: '3des-sha1', recommended: 'AES-256-GCM with SHA-256' },
-  { severity: 'Low', title: 'DPD interval is conservative', category: 'Availability', explanation: 'The dead peer detection interval may delay recovery when a tunnel endpoint becomes unavailable.', detected: '180 seconds', recommended: 'Set interval to 30–60 seconds' },
+  {
+    severity: 'Critical',
+    title: 'Weak pre-shared key detected',
+    category: 'Authentication',
+    explanation: 'The configured key is short enough to be exposed to practical dictionary and brute-force attacks.',
+    detected: 'vpn-key-2024',
+    recommended: 'Use a 32+ character random secret or PKI certificates',
+    detected_config_line: 'authby=secret\npsk="vpn-key-2024"',
+    recommended_config_line: 'authby=pubkey\n# Or 32+ char random: psk="s8V#9mK2$pL9@zX4!qW7&vB1^nC3*jY5"',
+    compliance_tags: ['NIST SP 800-77', 'PCI-DSS 4.0', 'CIS Benchmark'],
+  },
+  {
+    severity: 'High',
+    title: 'Aggressive mode is enabled',
+    category: 'IKE negotiation',
+    explanation: 'Aggressive mode reveals identity information during IKE phase 1 and reduces negotiation privacy.',
+    detected: 'aggressive-mode / ikev1',
+    recommended: 'Use main mode with IKEv2',
+    detected_config_line: 'keyexchange=ikev1\naggressive=yes',
+    recommended_config_line: 'keyexchange=ikev2\naggressive=no',
+    compliance_tags: ['IETF RFC 8247', 'NIST SP 800-77', 'ANSSI'],
+  },
+  {
+    severity: 'Medium',
+    title: 'Legacy encryption proposal (3DES)',
+    category: 'Cryptography',
+    explanation: '3DES remains enabled in the proposal set and should be removed from modern deployments due to Sweet32.',
+    detected: '3des-sha1',
+    recommended: 'AES-256-GCM with SHA-384 (RFC 4106)',
+    detected_config_line: 'ike=3des-sha1-modp1024!',
+    recommended_config_line: 'ike=aes256gcm16-sha384-modp3072!\nesp=aes256gcm16-modp3072!',
+    compliance_tags: ['NIST SP 800-77', 'PCI-DSS 4.0', 'FIPS 140-3'],
+  },
+  {
+    severity: 'Low',
+    title: 'DPD interval is conservative',
+    category: 'Availability',
+    explanation: 'The dead peer detection interval may delay recovery when a tunnel endpoint becomes unavailable.',
+    detected: '180 seconds',
+    recommended: 'Set interval to 30–60 seconds with dpdaction=restart',
+    detected_config_line: 'dpddelay=180s\ndpdaction=restart',
+    recommended_config_line: 'dpddelay=30s\ndpdaction=restart\ndpdtimeout=120s',
+    compliance_tags: ['IETF RFC 3706', 'CIS Benchmark'],
+  },
 ]
 
 const severityStyles: Record<string, string> = {
@@ -72,9 +115,70 @@ function Brand() {
 }
 
 function Topbar({ onLogout }: { onLogout: () => void }) {
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking')
+
+  useEffect(() => {
+    let mounted = true
+    const checkBackend = async () => {
+      try {
+        const res = await fetch('http://127.0.0.1:8000/', { method: 'GET' })
+        if (mounted) {
+          setBackendStatus(res.ok ? 'online' : 'offline')
+        }
+      } catch {
+        try {
+          const proxyRes = await fetch('/', { method: 'GET' })
+          if (mounted) {
+            setBackendStatus(proxyRes.ok ? 'online' : 'offline')
+          }
+        } catch {
+          if (mounted) setBackendStatus('offline')
+        }
+      }
+    }
+
+    checkBackend()
+    const interval = setInterval(checkBackend, 8000)
+    return () => {
+      mounted = false
+      clearInterval(interval)
+    }
+  }, [])
+
   return (
     <header className="relative z-10 flex items-center justify-between border-b border-[#e4d7c2]/[0.12] pb-5">
-      <Brand />
+      <div className="flex items-center gap-4">
+        <Brand />
+        <div className="hidden sm:flex items-center gap-2 rounded-full border border-[#e4d7c2]/15 bg-[#141612]/70 px-3 py-1 text-[11px]">
+          <span
+            className={`size-2 rounded-full transition-all duration-300 ${
+              backendStatus === 'online'
+                ? 'bg-[#93a56f] shadow-[0_0_8px_#93a56f]'
+                : backendStatus === 'offline'
+                ? 'bg-[#e58a78] shadow-[0_0_8px_#e58a78]'
+                : 'bg-[#d9a06a] animate-pulse'
+            }`}
+          />
+          <span className="text-[#a8aaa0]">
+            Backend API:{' '}
+            <strong
+              className={
+                backendStatus === 'online'
+                  ? 'text-[#c1d19d]'
+                  : backendStatus === 'offline'
+                  ? 'text-[#f1ad9d]'
+                  : 'text-[#f0bd86]'
+              }
+            >
+              {backendStatus === 'online'
+                ? 'Online (Port 8000)'
+                : backendStatus === 'offline'
+                ? 'Offline (Start backend)'
+                : 'Checking...'}
+            </strong>
+          </span>
+        </div>
+      </div>
       <button
         onClick={onLogout}
         className="flex items-center gap-2 rounded-lg border border-[#e4d7c2]/[0.16] px-3 py-2 text-xs font-medium text-[#c9c7bd] transition hover:border-[#d9a06a]/50 hover:text-[#f0bd86]"
@@ -183,8 +287,23 @@ function Upload({
           </p>
 
           {error && (
-            <div className="mt-8 rounded-2xl border border-[#e58a78]/40 bg-[#e58a78]/10 p-4 text-center text-sm text-[#f1ad9d]">
-              {error}
+            <div className="mt-8 rounded-2xl border border-[#e58a78]/40 bg-[#e58a78]/10 p-5 text-left text-sm text-[#f1ad9d]">
+              <div className="flex items-center gap-2 font-semibold text-[#f5c2b5]">
+                <ShieldAlert className="size-4 shrink-0" />
+                <span>Connection or Analysis Error</span>
+              </div>
+              <p className="mt-2 text-xs leading-relaxed text-[#f1ad9d]">{error}</p>
+              <div className="mt-3.5 rounded-xl border border-[#e58a78]/25 bg-[#111310]/80 p-3.5 text-xs text-[#d0cec4]">
+                <p className="font-semibold text-[#f0bd86]">How to start the FastAPI backend server:</p>
+                <ul className="mt-1.5 list-disc space-y-1 pl-4 text-[11px] text-[#a8aaa0]">
+                  <li>
+                    Run <code className="rounded bg-[#1e221b] px-1.5 py-0.5 font-mono text-[#f5f1e8]">start_backend.bat</code> or <code className="rounded bg-[#1e221b] px-1.5 py-0.5 font-mono text-[#f5f1e8]">start_all.bat</code> in the project folder.
+                  </li>
+                  <li>
+                    Or execute <code className="rounded bg-[#1e221b] px-1.5 py-0.5 font-mono text-[#f5f1e8]">npm run dev:backend</code> in a separate terminal.
+                  </li>
+                </ul>
+              </div>
             </div>
           )}
 
@@ -295,8 +414,8 @@ function Processing() {
   const statuses = [
     'Parsing protocol structure...',
     'Checking security parameters...',
-    'Running AI analysis...',
-    'Finalizing report...',
+    'Auditing compliance standards (NIST, RFC, PCI-DSS)...',
+    'Generating remediation diffs...',
   ]
 
   useEffect(() => {
@@ -351,6 +470,17 @@ function Results({
     [filter, findingsList]
   )
 
+  // Aggregate compliance statistics grouped by standard
+  const complianceStats = useMemo(() => {
+    const map: Record<string, number> = {}
+    findingsList.forEach((f) => {
+      f.compliance_tags?.forEach((tag) => {
+        map[tag] = (map[tag] || 0) + 1
+      })
+    })
+    return Object.entries(map).sort((a, b) => b[1] - a[1])
+  }, [findingsList])
+
   const downloadUrl = `/api/reports/${data.reportId}.pdf`
 
   return (
@@ -368,7 +498,7 @@ function Results({
               {data.scanName}
             </h1>
             <p className="mt-2 text-sm text-[#a8aaa0]">
-              {data.fileName} · AI security assessment
+              {data.fileName} · Security assessment &amp; compliance report
             </p>
           </div>
           <div className="flex gap-3">
@@ -390,41 +520,94 @@ function Results({
           </div>
         </div>
 
-        <section className="grid gap-5 lg:grid-cols-[280px_1fr]">
-          <div className="rounded-3xl border border-[#e4d7c2]/[0.14] bg-[#1a1d18]/80 p-7 text-center">
+        {/* Top Section: Score Gauge, AI Assessment & Aggregate Compliance Stats */}
+        <section className="grid gap-5 md:grid-cols-2 lg:grid-cols-[270px_1fr_310px]">
+          {/* 1. Score Gauge Card */}
+          <div className="rounded-3xl border border-[#e4d7c2]/[0.14] bg-[#1a1d18]/80 p-6 text-center">
             <div
-              className="score-ring mx-auto grid size-48 place-items-center rounded-full"
+              className="score-ring mx-auto grid size-44 place-items-center rounded-full"
               style={{
                 background: `conic-gradient(#c88750 0 ${data.score}%, rgba(228,215,194,.09) ${data.score}% 100%)`,
               }}
             >
-              <div className="grid size-36 place-items-center rounded-full bg-[#151713]">
+              <div className="grid size-32 place-items-center rounded-full bg-[#151713]">
                 <div>
-                  <p className="text-5xl font-semibold text-[#f5f1e8]">{data.score}</p>
-                  <p className="text-xs uppercase tracking-[0.18em] text-[#d9a06a]">{data.grade}</p>
+                  <p className="text-4xl font-semibold text-[#f5f1e8]">{data.score}</p>
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-[#d9a06a]">{data.grade}</p>
                 </div>
               </div>
             </div>
-            <div className="mt-7 grid grid-cols-2 gap-2 text-left">
+            <div className="mt-6 grid grid-cols-2 gap-2 text-left">
               {(['Critical', 'High', 'Medium', 'Low'] as const).map((s) => (
-                <div key={s} className={`rounded-xl border p-3 ${severityStyles[s]}`}>
-                  <p className="text-[10px] uppercase tracking-wider opacity-75">{s}</p>
-                  <p className="mt-1 text-xl font-semibold">{data.severityCounts?.[s] ?? 0}</p>
+                <div key={s} className={`rounded-xl border p-2.5 ${severityStyles[s]}`}>
+                  <p className="text-[9px] uppercase tracking-wider opacity-75">{s}</p>
+                  <p className="mt-0.5 text-lg font-semibold">{data.severityCounts?.[s] ?? 0}</p>
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="rounded-3xl border border-[#d9a06a]/25 bg-gradient-to-br from-[#d9a06a]/[0.09] to-[#1a1d18]/80 p-7">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#e0a66d]">
-              <Sparkles className="size-4" /> AI assessment
+          {/* 2. AI Executive Summary Card */}
+          <div className="flex flex-col justify-between rounded-3xl border border-[#d9a06a]/25 bg-gradient-to-br from-[#d9a06a]/[0.09] to-[#1a1d18]/80 p-6">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#e0a66d]">
+                <Sparkles className="size-4" /> AI assessment
+              </div>
+              <p className="mt-4 text-base leading-7 text-[#eee9dd] sm:text-lg sm:leading-8">
+                {data.aiSummary}
+              </p>
             </div>
-            <p className="mt-6 max-w-2xl text-xl leading-9 text-[#eee9dd]">
-              {data.aiSummary}
+            <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[#e4d7c2]/10 pt-3 text-xs text-[#858a7e]">
+              <span>Audit Target: <b className="text-[#f5f1e8]">{data.fileName}</b></span>
+              <span>·</span>
+              <span>Findings: <b className="text-[#d9a06a]">{findingsList.length}</b></span>
+            </div>
+          </div>
+
+          {/* 3. Aggregate Compliance Summary Widget */}
+          <div className="rounded-3xl border border-[#67e8e5]/25 bg-gradient-to-br from-[#67e8e5]/[0.06] to-[#1a1d18]/85 p-6 md:col-span-2 lg:col-span-1">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#67e8e5]">
+                <ShieldAlert className="size-4" /> Compliance Impact
+              </div>
+              <span className="rounded-full border border-[#67e8e5]/30 bg-[#67e8e5]/10 px-2 py-0.5 text-[10px] font-mono text-[#67e8e5]">
+                {complianceStats.length} Standards
+              </span>
+            </div>
+
+            <p className="mt-2 text-xs text-[#a8aaa0]">
+              Aggregate framework violations across findings:
             </p>
+
+            <div className="mt-3.5 space-y-2">
+              {complianceStats.length > 0 ? (
+                complianceStats.slice(0, 5).map(([standard, count]) => (
+                  <div
+                    key={standard}
+                    className="flex items-center justify-between rounded-xl border border-[#e4d7c2]/[0.08] bg-[#111310]/75 px-3 py-2 text-xs"
+                  >
+                    <span className="font-medium text-[#e2e0d7]">{standard}</span>
+                    <span className="inline-flex items-center rounded-md border border-[#e58a78]/30 bg-[#e58a78]/10 px-2 py-0.5 text-[10px] font-semibold text-[#f1ad9d]">
+                      {count} {count === 1 ? 'violation' : 'violations'}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-xl border border-[#93a56f]/30 bg-[#93a56f]/10 p-3 text-center text-xs text-[#c1d19d]">
+                  No compliance framework violations detected.
+                </div>
+              )}
+            </div>
+
+            {complianceStats.length > 0 && (
+              <p className="mt-3.5 text-center text-[11px] text-[#777d72]">
+                Remediate highlighted items below to meet standard baselines.
+              </p>
+            )}
           </div>
         </section>
 
+        {/* Findings List Section */}
         <section className="mt-12">
           <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <h2 className="text-2xl font-semibold">
@@ -454,32 +637,108 @@ function Results({
               return (
                 <article
                   key={`${finding.title}-${index}`}
-                  className="rounded-2xl border border-[#e4d7c2]/[0.13] bg-[#1a1d18]/75 transition hover:-translate-y-0.5 hover:border-[#d9a06a]/35"
+                  className="rounded-2xl border border-[#e4d7c2]/[0.13] bg-[#1a1d18]/75 transition hover:border-[#d9a06a]/35"
                 >
                   <button
                     onClick={() => setOpen(isOpen ? null : index)}
-                    className="flex w-full items-center gap-4 p-5 text-left"
+                    className="flex w-full items-center gap-3 p-4 sm:gap-4 sm:p-5 text-left"
                   >
-                    <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider ${severityStyles[finding.severity]}`}>
+                    <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider ${severityStyles[finding.severity]}`}>
                       {finding.severity}
                     </span>
                     <span className="flex-1 font-semibold text-[#f2f0e9]">
                       {finding.title}
-                      <span className="ml-3 text-xs font-normal text-[#858a7e]">{finding.category}</span>
+                      <span className="ml-3 hidden text-xs font-normal text-[#858a7e] sm:inline">{finding.category}</span>
                     </span>
-                    {isOpen ? <ChevronUp className="size-4 text-[#858a7e]" /> : <ChevronDown className="size-4 text-[#858a7e]" />}
+
+                    {/* Compliance Badges next to severity/title */}
+                    {finding.compliance_tags && finding.compliance_tags.length > 0 && (
+                      <div className="hidden sm:flex flex-wrap items-center gap-1.5">
+                        {finding.compliance_tags.map((tag) => (
+                          <span
+                            key={tag}
+                            className="rounded-md border border-[#67e8e5]/25 bg-[#67e8e5]/[0.08] px-2 py-0.5 text-[10px] font-medium text-[#67e8e5]"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {isOpen ? <ChevronUp className="size-4 shrink-0 text-[#858a7e]" /> : <ChevronDown className="size-4 shrink-0 text-[#858a7e]" />}
                   </button>
+
                   {isOpen && (
                     <div className="border-t border-[#e4d7c2]/10 px-5 pb-5 pt-4 text-sm leading-6 text-[#a8aaa0]">
-                      <p>{finding.explanation}</p>
-                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                        <div className="rounded-xl bg-[#111310]/70 p-4">
-                          <p className="text-[10px] uppercase tracking-wider text-[#777d72]">Detected</p>
-                          <p className="mt-1 font-mono text-[#e0a66d]">{finding.detected}</p>
+                      <p className="leading-relaxed text-[#c9c7bd]">{finding.explanation}</p>
+
+                      {/* Mobile Compliance Badges */}
+                      {finding.compliance_tags && finding.compliance_tags.length > 0 && (
+                        <div className="mt-3 flex flex-wrap items-center gap-1.5 sm:hidden">
+                          <span className="text-[10px] uppercase tracking-wider text-[#777d72]">Standards:</span>
+                          {finding.compliance_tags.map((tag) => (
+                            <span
+                              key={tag}
+                              className="rounded-md border border-[#67e8e5]/25 bg-[#67e8e5]/[0.08] px-2 py-0.5 text-[10px] font-medium text-[#67e8e5]"
+                            >
+                              {tag}
+                            </span>
+                          ))}
                         </div>
-                        <div className="rounded-xl bg-[#111310]/70 p-4">
-                          <p className="text-[10px] uppercase tracking-wider text-[#777d72]">Recommended</p>
-                          <p className="mt-1 font-mono text-[#c1d19d]">{finding.recommended}</p>
+                      )}
+
+                      {/* Feature 1: Side-by-Side Monospace Before / After Remediation Preview */}
+                      <div className="mt-5 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#bfc7ae]">
+                            <Sparkles className="size-3 text-[#d9a06a]" />
+                            Remediation Preview (Before / After Fix)
+                          </span>
+                          <span className="text-[10px] font-mono text-[#777d72]">
+                            NIST SP 800-77 &amp; RFC Compliant
+                          </span>
+                        </div>
+
+                        <div className="grid gap-3 md:grid-cols-2">
+                          {/* Before: Detected Configuration (Red/Muted tone) */}
+                          <div className="overflow-hidden rounded-xl border border-[#e58a78]/30 bg-[#161211]/90">
+                            <div className="flex items-center justify-between border-b border-[#e58a78]/20 bg-[#e58a78]/[0.08] px-3.5 py-2">
+                              <div className="flex items-center gap-2">
+                                <span className="size-2 rounded-full bg-[#e58a78]" />
+                                <span className="text-[11px] font-semibold uppercase tracking-wider text-[#f1ad9d]">
+                                  Detected Config (Weak)
+                                </span>
+                              </div>
+                              <span className="rounded bg-[#e58a78]/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-[#f1ad9d]">
+                                BEFORE
+                              </span>
+                            </div>
+                            <div className="p-3.5">
+                              <pre className="overflow-x-auto font-mono text-xs leading-5 text-[#f1ad9d]/90">
+                                <code>{finding.detected_config_line || finding.detected}</code>
+                              </pre>
+                            </div>
+                          </div>
+
+                          {/* After: Recommended Fix (Green/Accent tone) */}
+                          <div className="overflow-hidden rounded-xl border border-[#93a56f]/35 bg-[#121612]/90">
+                            <div className="flex items-center justify-between border-b border-[#93a56f]/20 bg-[#93a56f]/[0.08] px-3.5 py-2">
+                              <div className="flex items-center gap-2">
+                                <span className="size-2 rounded-full bg-[#93a56f]" />
+                                <span className="text-[11px] font-semibold uppercase tracking-wider text-[#c1d19d]">
+                                  Recommended Fix (Compliant)
+                                </span>
+                              </div>
+                              <span className="rounded bg-[#93a56f]/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-[#c1d19d]">
+                                AFTER
+                              </span>
+                            </div>
+                            <div className="p-3.5">
+                              <pre className="overflow-x-auto font-mono text-xs leading-5 text-[#c1d19d]">
+                                <code>{finding.recommended_config_line || finding.recommended}</code>
+                              </pre>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
